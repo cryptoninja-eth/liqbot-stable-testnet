@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "outDir": "build",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "target": "ES2019",
+    "lib": ["ES2019", "DOM"],
+    "module": "ES2020",
+    "moduleResolution": "Node",
+    "strict": true,
+    "strictNullChecks": true,
+    "esModuleInterop": true
+  }
+}

@@ -10,9 +10,6 @@ import { error, info, success, warn } from "./logging.js";
 import { Executor } from "./execution.js";
 import { selectForLiquidation } from "./strategy.js";
 
-// Don't pay a priority fee by default when using Flashbots
-const defaultMaxPriorityFeePerGas = config.relayUrl ? 0 : 5e9;
-
 // About 2M gas required to liquidate 10 Troves (much of it is refunded though).
 const defaultMaxTrovesToLiquidate = 10;
 
@@ -30,24 +27,10 @@ export const tryToLiquidate = async (
 ): Promise<LiquidationOutcome> => {
   const { store } = liquity;
 
-  const [baseFeePerGas, riskiestTroves] = await Promise.all([
-    liquity.connection.provider
-      .getBlock(store.state.blockTag ?? "latest")
-      .then(block => block.baseFeePerGas),
-
-    liquity.getVaults({
-      first: 1000,
-      sortedBy: "ascendingCollateralRatio"
-    })
-  ]);
-
-  assert(baseFeePerGas);
-
-  const maxPriorityFeePerGas = BigNumber.from(
-    config.maxPriorityFeePerGas ?? defaultMaxPriorityFeePerGas
-  );
-
-  const maxFeePerGas = baseFeePerGas.mul(2).add(maxPriorityFeePerGas);
+  const riskiestTroves = await liquity.getVaults({
+    first: 1000,
+    sortedBy: "ascendingCollateralRatio"
+  })
 
   const troves = selectForLiquidation(
     riskiestTroves,
@@ -83,25 +66,10 @@ export const tryToLiquidate = async (
     const liquidation = await liquity.populate.liquidate(addresses, { gasLimit });
     assert(liquidation.rawPopulatedTransaction.gasLimit);
 
-    liquidation.rawPopulatedTransaction.maxFeePerGas = maxFeePerGas;
-    liquidation.rawPopulatedTransaction.maxPriorityFeePerGas = maxPriorityFeePerGas;
-
-    const worstCost = Decimal.fromBigNumberString(
-      maxFeePerGas.mul(liquidation.rawPopulatedTransaction.gasLimit).toHexString()
-    ).mul(store.state.price);
+    // liquidation.rawPopulatedTransaction.gas = 
+    // liquidation.rawPopulatedTransaction.gasPrice = 
 
     const expectedCompensation = executor.estimateCompensation(troves, store.state.price);
-
-    if (worstCost.gt(expectedCompensation)) {
-      // In reality, the TX cost will be lower than this thanks to storage refunds, but let's be
-      // on the safe side.
-      warn(
-        `Skipping liquidation of ${troves.length} Trove(s) due to high TX cost ` +
-          `($${worstCost.toString(2)} > $${expectedCompensation.toString(2)}).`
-      );
-
-      return LiquidationOutcome.SKIPPED_DUE_TO_HIGH_COST;
-    }
 
     info(
       `Attempting to liquidate ${troves.length} Trove(s) ` +
@@ -109,6 +77,9 @@ export const tryToLiquidate = async (
     );
 
     const receipt = await executor.execute(liquidation);
+
+    info(">>>>> Receipt:");
+    info(JSON.stringify(receipt));
 
     if (receipt.status === "failed") {
       if (receipt.rawReceipt) {
@@ -124,7 +95,7 @@ export const tryToLiquidate = async (
       receipt.details;
 
     const gasCost = Decimal.fromBigNumberString(
-      receipt.rawReceipt.effectiveGasPrice.mul(receipt.rawReceipt.gasUsed).toHexString()
+      receipt.rawReceipt.gasUsed.toHexString()
     ).mul(store.state.price);
 
     const totalCompensation = collateralGasCompensation
@@ -133,8 +104,8 @@ export const tryToLiquidate = async (
       .sub(minerCut ?? Decimal.ZERO);
 
     success(
-      `Received ${chalk.bold(`${collateralGasCompensation.toString(4)} ETH`)} + ` +
-        `${chalk.bold(`${bpdGasCompensation.toString(2)} LUSD`)} compensation (` +
+      `Received ${chalk.bold(`${collateralGasCompensation.toString(4)} RBTC`)} + ` +
+        `${chalk.bold(`${bpdGasCompensation.toString(2)} BPD`)} compensation (` +
         (totalCompensation.gte(gasCost)
           ? `${chalk.green(`$${totalCompensation.sub(gasCost).toString(2)}`)} profit`
           : `${chalk.red(`$${gasCost.sub(totalCompensation).toString(2)}`)} loss`) +
